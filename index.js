@@ -7,7 +7,7 @@ const logger = require('./middlewre/loggerMiddleware')
 app.use(cors())
 app.use(express.json())
 app.use(logger)
-const PORT = 3001
+const PORT = process.env.PORT || 3001
 app.listen(PORT, () => console.log(`Server runin on port ${PORT}`))
 
 let notes = [
