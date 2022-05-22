@@ -1,95 +1,128 @@
-// const http= require('http')
-const express = require('express')
-const cors = require('cors')
-const app = express()
-const logger = require('./middlewre/loggerMiddleware')
+require("dotenv").config();
+require("./mongo");
 
-app.use(cors())
-app.use(express.json())
-app.use(logger)
-const PORT = process.env.PORT || 3001
-app.listen(PORT, () => console.log(`Server runin on port ${PORT}`))
+const Sentry = require("@sentry/node");
+const Tracing = require("@sentry/tracing");
+const express = require("express");
+const app = express();
+const cors = require("cors");
+const Note = require("./models/Note");
+const logger = require("./middlewre/loggerMiddleware");
+const { response } = require("express");
+const notFound = require("./middlewre/notFound");
+const handelError = require("./middlewre/handelError");
 
-let notes = [
-  {
-    id: 1,
-    body: 'Me tengo que levantar a las 8:30mpara trabajar',
-    date: '2019-05-30T17:30:31.0982',
-    important: true
-  },
-  {
-    id: 2,
-    body: 'Comprar avena',
-    date: '2019-05-30T18:30:31.0982',
-    important: false
-  },
-  {
-    id: 3,
-    body: 'Dormir temprano',
-    date: '2019-05-30T19:30:31.0982',
-    important: true
-  }
-]
+app.use(cors());
+app.use(express.json());
 
-// const app= http.createServer((req,res)=>{
-//   res.writeHead(200,{'Content-Type':'application/json'})
-//   res.end(JSON.stringify (notes))
-// })
+Sentry.init({
+  dsn: "https://41642b75817741c2aa46716ca75dd561@o1258159.ingest.sentry.io/6431922",
+  integrations: [
+    // enable HTTP calls tracing
+    new Sentry.Integrations.Http({ tracing: true }),
+    // enable Express.js middleware tracing
+    new Tracing.Integrations.Express({ app }),
+  ],
 
-app.get('/', (req, res) => {
-  res.send('<h1/>Hello World</h1>')
-})
-app.get('/api/notes', (req, res) => {
-  res.json(notes)
-})
+  // Set tracesSampleRate to 1.0 to capture 100%
+  // of transactions for performance monitoring.
+  // We recommend adjusting this value in production
+  tracesSampleRate: 1.0,
+});
 
-app.post('/api/notes', (req, res) => {
-  const note = req.body
+app.use(logger);
+const PORT = process.env.PORT;
+app.listen(PORT, () => console.log(`Server runin on port ${PORT}`));
 
-  if (!note || !note.body) {
-    return res.status(400).json({
-      error: 'note.body is missing'
+app.use(Sentry.Handlers.requestHandler());
+// TracingHandler creates a trace for every incoming request
+app.use(Sentry.Handlers.tracingHandler());
+
+app.get("/", (req, res, next) => {
+  res.send("<h1/>Hello World</h1>").catch((error) => next(error));
+});
+app.get("/api/notes", (req, res, next) => {
+  Note.find({})
+    .then((notes) => {
+      res.json(notes);
     })
+    .catch((error) => next(error));
+});
+
+app.post("/api/notes", (req, res, next) => {
+  const note = req.body;
+  console.log(note.content);
+  if (!note || !note.content) {
+    return res.status(400).json({
+      error: "note.body is missing",
+    });
   }
-  const ids = notes.map((note) => note.id)
-  const maxId = Math.max(...ids)
 
-  const newNote = {
-    id: maxId + 1,
-    body: note.body,
-    important: typeof note.important !== 'undefined' ? note.important : false,
-    date: new Date().toISOString()
-  }
+  const newNote = new Note({
+    content: note.content,
+    important: typeof note.important !== "undefined" ? note.important : false,
+    date: new Date().toISOString(),
+  });
 
-  notes = [...notes, newNote]
-  // o notes=notes.concat(newNote)
-  res.status(201).json(note)
-})
+  newNote
+    .save()
+    .then((savedNote) => {
+      res.json(savedNote);
+    })
+    .catch((error) => next(error));
+});
 
-app.get('/api/notes/:id', (req, res) => {
-  const id = Number(req.params.id)
-  const note = notes.find((note) => note.id === id)
-  if (note) {
-    res.json(note)
-  } else {
-    res.status(404).end()
-  }
-})
+app.get("/api/notes/:id", (req, res, next) => {
+  const { id } = req.params;
 
-app.delete('/api/notes/:id', (req, res) => {
-  const id = Number(req.params.id)
-  notes = notes.filter((note) => note.id !== id)
-  res.send({ message: 'Note has been eliminated' })
-  res.status(204).end()
-})
+  Note.findById(id)
+    .then((note) => {
+      if (note) {
+        return res.json(note);
+      } else {
+        res.status(404).end();
+      }
+    })
+    .catch((err) => {
+      next(err);
+    });
+});
 
-app.get('/api/notes', (req, res) => {
-  res.json(notes)
-})
+app.put("/api/notes/:id", (req, res, next) => {
+  const { id } = req.params;
+  const note = req.body;
 
-app.use((req, res) => {
-  console.log(req.path)
-  res.status(404).json({
-    error: 'Not found'
-  })
-})
+  const newNoteInfo = {
+    content: note.content,
+    important: typeof note.important !== "undefined" ? note.important : false,
+  };
+
+  Note.findByIdAndUpdate(id, newNoteInfo, { new: true })
+    .then((result) => {
+      res.json(result);
+    })
+    .catch((error) => next(error));
+});
+
+app.delete("/api/notes/:id", (req, res, next) => {
+  const { id } = req.params;
+
+  Note.findByIdAndDelete(id)
+    .then(() => {
+      res.status(204).end();
+    })
+    .catch((error) => next(error));
+
+  res.send({ message: "Note has been eliminated" });
+  res.status(204).end();
+});
+
+app.get("/api/notes", (req, res, next) => {
+  res.json(notes).catch((error) => next(error));
+});
+
+//middlewares sino encuentra nada tengo las respuestas
+
+app.use(notFound);
+app.use(Sentry.Handlers.errorHandler());
+app.use(handelError);
